@@ -1,0 +1,31 @@
+name: fanfic-bot
+services:
+  - name: bot
+    type: web
+    git:
+      repository: github.com/velhotestamentos-png/fanfic-bot
+      branch: main
+    docker:
+      dockerfile: Dockerfile
+    instance_type: nano
+    regions:
+      - was
+    ports:
+      - port: 3000
+        protocol: http
+    routes:
+      - path: /
+        port: 3000
+    health_checks:
+      - path: /api/healthz
+        port: 3000
+        protocol: http
+        initial_delay_seconds: 10
+        period_seconds: 30
+    env:
+      - key: PORT
+        value: "3000"
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_TOKEN
+        secret: DISCORD_TOKEN
