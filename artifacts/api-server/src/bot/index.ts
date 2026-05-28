@@ -4,6 +4,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  AttachmentBuilder,
   Events,
   type ButtonInteraction,
   type Message,
@@ -16,6 +17,7 @@ import {
   deleteSession,
   parseChoices,
   stripChoices,
+  buildStoryText,
 } from "./story";
 
 const client = new Client({
@@ -84,6 +86,36 @@ client.on(Events.MessageCreate, async (message: Message) => {
   if (message.author.bot) return;
 
   const content = message.content.trim();
+
+  if (content.toLowerCase() === "!fanfic save") {
+    const userId = message.author.id;
+    const channelId = message.channelId;
+    const session = getSession(userId, channelId);
+
+    if (!session) {
+      await message.reply(
+        "❌ Você não tem nenhuma história em andamento. Use `!fanfic` para começar uma.",
+      );
+      return;
+    }
+
+    const hasContent = session.messages.some((m) => m.role === "assistant");
+    if (!hasContent) {
+      await message.reply("❌ A história ainda não tem conteúdo para salvar.");
+      return;
+    }
+
+    const storyText = buildStoryText(session, message.author.username);
+    const buffer = Buffer.from(storyText, "utf-8");
+    const filename = `fanfic_${message.author.username}_${Date.now()}.txt`;
+    const attachment = new AttachmentBuilder(buffer, { name: filename });
+
+    await message.reply({
+      content: "📖 Aqui está sua história até agora!",
+      files: [attachment],
+    });
+    return;
+  }
 
   if (content.toLowerCase().startsWith("!fanfic")) {
     const theme = content.slice(7).trim();
