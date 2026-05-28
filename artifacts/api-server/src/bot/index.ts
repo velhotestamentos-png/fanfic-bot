@@ -29,10 +29,11 @@ const client = new Client({
   ],
 });
 
-function buildChoiceButtons(choices: string[]): ActionRowBuilder<ButtonBuilder> {
+function buildChoiceButtons(
+  choices: string[],
+): ActionRowBuilder<ButtonBuilder> {
   const row = new ActionRowBuilder<ButtonBuilder>();
   const emojis = ["1️⃣", "2️⃣", "3️⃣"];
-
   choices.forEach((choice, i) => {
     row.addComponents(
       new ButtonBuilder()
@@ -41,7 +42,6 @@ function buildChoiceButtons(choices: string[]): ActionRowBuilder<ButtonBuilder> 
         .setStyle(ButtonStyle.Primary),
     );
   });
-
   return row;
 }
 
@@ -63,6 +63,11 @@ async function sendStoryChunk(
   isReply = false,
 ) {
   const narrative = stripChoices(storyText);
+
+  if (!narrative) {
+    throw new Error("Empty story response from AI");
+  }
+
   const components =
     choices.length > 0
       ? [buildChoiceButtons(choices), buildEndButtons()]
@@ -75,7 +80,7 @@ async function sendStoryChunk(
 
   if (isReply && "reply" in target) {
     return await (target as Message).reply(payload);
-  } else if ("update" in target) {
+  } else if ("followUp" in target) {
     await (target as ButtonInteraction).deferUpdate();
     return await (target as ButtonInteraction).followUp(payload);
   }
@@ -86,30 +91,40 @@ client.on(Events.MessageCreate, async (message: Message) => {
   if (message.author.bot) return;
 
   const content = message.content.trim();
+  const lower = content.toLowerCase();
 
-  if (content.toLowerCase() === "!fanfic save") {
-    const userId = message.author.id;
-    const channelId = message.channelId;
+  if (!lower.startsWith("!fanfic")) return;
+
+  const userId = message.author.id;
+  const channelId = message.channelId;
+
+  // !fanfic reset — limpa sessão travada
+  if (lower === "!fanfic reset") {
+    deleteSession(userId, channelId);
+    await message.reply(
+      "🔄 Sessão resetada! Use `!fanfic` para começar uma nova história.",
+    );
+    return;
+  }
+
+  // !fanfic save — exporta a história como .txt
+  if (lower === "!fanfic save") {
     const session = getSession(userId, channelId);
-
     if (!session) {
       await message.reply(
         "❌ Você não tem nenhuma história em andamento. Use `!fanfic` para começar uma.",
       );
       return;
     }
-
     const hasContent = session.messages.some((m) => m.role === "assistant");
     if (!hasContent) {
       await message.reply("❌ A história ainda não tem conteúdo para salvar.");
       return;
     }
-
     const storyText = buildStoryText(session, message.author.username);
     const buffer = Buffer.from(storyText, "utf-8");
     const filename = `fanfic_${message.author.username}_${Date.now()}.txt`;
     const attachment = new AttachmentBuilder(buffer, { name: filename });
-
     await message.reply({
       content: "📖 Aqui está sua história até agora!",
       files: [attachment],
@@ -117,47 +132,43 @@ client.on(Events.MessageCreate, async (message: Message) => {
     return;
   }
 
-  if (content.toLowerCase().startsWith("!fanfic")) {
-    const theme = content.slice(7).trim();
-    const userId = message.author.id;
-    const channelId = message.channelId;
-
-    const existing = getSession(userId, channelId);
-    if (existing) {
-      await message.reply(
-        "⚠️ Você já tem uma história em andamento neste canal! Use os botões para continuar ou clique em **🔚 Encerrar história** para começar uma nova.",
-      );
-      return;
-    }
-
-    const session = createSession(userId, channelId, SYSTEM_PROMPT);
-
-    const prompt = theme
-      ? `Inicie uma fanfic com o tema: ${theme}. O protagonista sou eu (${message.author.username}).`
-      : `Inicie uma fanfic de fantasia/aventura. O protagonista sou eu (${message.author.username}).`;
-
-    session.messages.push({ role: "user", content: prompt });
-
-    const typing = message.channel.isSendable()
-      ? message.channel.sendTyping()
-      : Promise.resolve();
-
-    try {
-      await typing;
-      const responseText = await generateStory(session.messages);
-      session.messages.push({ role: "assistant", content: responseText });
-      const choices = parseChoices(responseText);
-      session.choices = choices;
-
-      await sendStoryChunk(message, responseText, choices, true);
-    } catch (err) {
-      logger.error({ err }, "Error generating story start");
-      await message.reply(
-        "❌ Erro ao gerar a história. Tente novamente em alguns segundos.",
-      );
-      deleteSession(userId, channelId);
-    }
+  // !fanfic [tema] — inicia nova história
+  const existing = getSession(userId, channelId);
+  if (existing) {
+    await message.reply(
+      "⚠️ Você já tem uma história em andamento! Use os botões para continuar, `!fanfic save` para salvar, ou `!fanfic reset` para começar uma nova.",
+    );
     return;
+  }
+
+  const theme = content.slice(7).trim();
+  const session = createSession(userId, channelId, SYSTEM_PROMPT);
+
+  const prompt = theme
+    ? `Inicie uma fanfic com o tema: ${theme}. O protagonista sou eu (${message.author.username}).`
+    : `Inicie uma fanfic de fantasia/aventura empolgante. O protagonista sou eu (${message.author.username}).`;
+
+  session.messages.push({ role: "user", content: prompt });
+
+  try {
+    if (message.channel.isSendable()) {
+      await message.channel.sendTyping();
+    }
+    const responseText = await generateStory(session.messages);
+    session.messages.push({ role: "assistant", content: responseText });
+    const choices = parseChoices(responseText);
+    session.choices = choices;
+    await sendStoryChunk(message, responseText, choices, true);
+  } catch (err) {
+    logger.error({ err }, "Error generating story start");
+    deleteSession(userId, channelId); // limpa sessão ANTES de tentar responder
+    try {
+      await message.reply(
+        "❌ Erro ao gerar a história. Tente `!fanfic` novamente em alguns segundos.",
+      );
+    } catch (replyErr) {
+      logger.error({ replyErr }, "Failed to send error reply");
+    }
   }
 });
 
@@ -171,7 +182,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (btn.customId === "end_story") {
     deleteSession(userId, channelId);
     await btn.update({
-      content: btn.message.content + "\n\n*— Fim da história. Use `!fanfic` para começar uma nova! —*",
+      content:
+        btn.message.content +
+        "\n\n*— Fim da história. Use `!fanfic` para começar uma nova! —*",
       components: [],
     });
     return;
@@ -181,7 +194,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const session = getSession(userId, channelId);
     if (!session) {
       await btn.reply({
-        content: "❌ Sessão expirada. Use `!fanfic` para começar uma nova história.",
+        content:
+          "❌ Sessão expirada. Use `!fanfic` para começar uma nova história.",
         ephemeral: true,
       });
       return;
@@ -201,7 +215,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
 
     await btn.update({
-      content: btn.message.content + `\n\n> ✅ **Você escolheu:** ${chosenText}`,
+      content:
+        btn.message.content + `\n\n> ✅ **Você escolheu:** ${chosenText}`,
       components: [],
     });
 
@@ -214,13 +229,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       session.messages.push({ role: "assistant", content: responseText });
       const choices = parseChoices(responseText);
       session.choices = choices;
-
       await sendStoryChunk(btn, responseText, choices, false);
     } catch (err) {
       logger.error({ err }, "Error generating story continuation");
-      await btn.followUp(
-        "❌ Erro ao continuar a história. Tente novamente.",
-      );
+      try {
+        await btn.followUp("❌ Erro ao continuar a história. Tente novamente.");
+      } catch (followErr) {
+        logger.error({ followErr }, "Failed to send followUp error");
+      }
     }
   }
 });
