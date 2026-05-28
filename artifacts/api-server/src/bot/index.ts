@@ -5,6 +5,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   AttachmentBuilder,
+  EmbedBuilder,
   Events,
   type ButtonInteraction,
   type Message,
@@ -29,9 +30,20 @@ const client = new Client({
   ],
 });
 
-function buildChoiceButtons(
-  choices: string[],
-): ActionRowBuilder<ButtonBuilder> {
+const chapterCounter = new Map<string, number>();
+
+function getNextChapter(userId: string, channelId: string): number {
+  const key = `${channelId}:${userId}`;
+  const next = (chapterCounter.get(key) ?? 0) + 1;
+  chapterCounter.set(key, next);
+  return next;
+}
+
+function resetChapter(userId: string, channelId: string) {
+  chapterCounter.delete(`${channelId}:${userId}`);
+}
+
+function buildChoiceButtons(choices: string[]): ActionRowBuilder<ButtonBuilder> {
   const row = new ActionRowBuilder<ButtonBuilder>();
   const emojis = ["1️⃣", "2️⃣", "3️⃣"];
   choices.forEach((choice, i) => {
@@ -45,7 +57,7 @@ function buildChoiceButtons(
   return row;
 }
 
-function buildEndButtons(): ActionRowBuilder<ButtonBuilder> {
+function buildEndButton(): ActionRowBuilder<ButtonBuilder> {
   const row = new ActionRowBuilder<ButtonBuilder>();
   row.addComponents(
     new ButtonBuilder()
@@ -56,35 +68,41 @@ function buildEndButtons(): ActionRowBuilder<ButtonBuilder> {
   return row;
 }
 
+function buildStoryEmbed(narrative: string, chapter: number, hasChoices: boolean): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`📖 Capítulo ${chapter}`)
+    .setDescription(narrative.slice(0, 4096))
+    .setFooter({
+      text: hasChoices ? "Escolha como a história continua:" : "Fim deste trecho.",
+    });
+}
+
 async function sendStoryChunk(
   target: Message | ButtonInteraction,
   storyText: string,
   choices: string[],
-  isReply = false,
+  isReply: boolean,
+  userId: string,
+  channelId: string,
 ) {
   const narrative = stripChoices(storyText);
+  if (!narrative) throw new Error("Empty story response from AI");
 
-  if (!narrative) {
-    throw new Error("Empty story response from AI");
-  }
+  const chapter = getNextChapter(userId, channelId);
+  const embed = buildStoryEmbed(narrative, chapter, choices.length > 0);
+  const components = choices.length > 0
+    ? [buildChoiceButtons(choices), buildEndButton()]
+    : [buildEndButton()];
 
-  const components =
-    choices.length > 0
-      ? [buildChoiceButtons(choices), buildEndButtons()]
-      : [buildEndButtons()];
+  const payload = { embeds: [embed], components };
 
-  const payload = {
-    content: narrative.slice(0, 2000),
-    components,
-  };
-
-  if (isReply && "reply" in target) {
+  if (isReply) {
     return await (target as Message).reply(payload);
-  } else if ("followUp" in target) {
+  } else {
     await (target as ButtonInteraction).deferUpdate();
     return await (target as ButtonInteraction).followUp(payload);
   }
-  return null;
 }
 
 client.on(Events.MessageCreate, async (message: Message) => {
@@ -119,22 +137,17 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const userId = message.author.id;
   const channelId = message.channelId;
 
-  // !fanfic reset — limpa sessão travada
   if (lower === "!fanfic reset") {
     deleteSession(userId, channelId);
-    await message.reply(
-      "🔄 Sessão resetada! Use `!fanfic` para começar uma nova história.",
-    );
+    resetChapter(userId, channelId);
+    await message.reply("🔄 Sessão resetada! Use `!fanfic` para começar uma nova história.");
     return;
   }
 
-  // !fanfic save — exporta a história como .txt
   if (lower === "!fanfic save") {
     const session = getSession(userId, channelId);
     if (!session) {
-      await message.reply(
-        "❌ Você não tem nenhuma história em andamento. Use `!fanfic` para começar uma.",
-      );
+      await message.reply("❌ Você não tem nenhuma história em andamento. Use `!fanfic` para começar uma.");
       return;
     }
     const hasContent = session.messages.some((m) => m.role === "assistant");
@@ -146,14 +159,10 @@ client.on(Events.MessageCreate, async (message: Message) => {
     const buffer = Buffer.from(storyText, "utf-8");
     const filename = `fanfic_${message.author.username}_${Date.now()}.txt`;
     const attachment = new AttachmentBuilder(buffer, { name: filename });
-    await message.reply({
-      content: "📖 Aqui está sua história até agora!",
-      files: [attachment],
-    });
+    await message.reply({ content: "📖 Aqui está sua história até agora!", files: [attachment] });
     return;
   }
 
-  // !fanfic [tema] — inicia nova história
   const existing = getSession(userId, channelId);
   if (existing) {
     await message.reply(
@@ -164,7 +173,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
 
   const theme = content.slice(7).trim();
   const session = createSession(userId, channelId, SYSTEM_PROMPT);
-
   const prompt = theme
     ? `Inicie uma fanfic com o tema: ${theme}. O protagonista sou eu (${message.author.username}).`
     : `Inicie uma fanfic de fantasia/aventura empolgante. O protagonista sou eu (${message.author.username}).`;
@@ -172,21 +180,18 @@ client.on(Events.MessageCreate, async (message: Message) => {
   session.messages.push({ role: "user", content: prompt });
 
   try {
-    if (message.channel.isSendable()) {
-      await message.channel.sendTyping();
-    }
+    if (message.channel.isSendable()) await message.channel.sendTyping();
     const responseText = await generateStory(session.messages);
     session.messages.push({ role: "assistant", content: responseText });
     const choices = parseChoices(responseText);
     session.choices = choices;
-    await sendStoryChunk(message, responseText, choices, true);
+    await sendStoryChunk(message, responseText, choices, true, userId, channelId);
   } catch (err) {
     logger.error({ err }, "Error generating story start");
-    deleteSession(userId, channelId); // limpa sessão ANTES de tentar responder
+    deleteSession(userId, channelId);
+    resetChapter(userId, channelId);
     try {
-      await message.reply(
-        "❌ Erro ao gerar a história. Tente `!fanfic` novamente em alguns segundos.",
-      );
+      await message.reply("❌ Erro ao gerar a história. Tente `!fanfic` novamente em alguns segundos.");
     } catch (replyErr) {
       logger.error({ replyErr }, "Failed to send error reply");
     }
@@ -202,12 +207,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (btn.customId === "end_story") {
     deleteSession(userId, channelId);
-    await btn.update({
-      content:
-        btn.message.content +
-        "\n\n*— Fim da história. Use `!fanfic` para começar uma nova! —*",
-      components: [],
-    });
+    resetChapter(userId, channelId);
+    const endEmbed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle("✅ Fim da história")
+      .setDescription("*— A aventura chegou ao fim. Use `!fanfic` para começar uma nova! —*");
+    await btn.update({ embeds: [endEmbed], components: [] });
     return;
   }
 
@@ -215,8 +220,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const session = getSession(userId, channelId);
     if (!session) {
       await btn.reply({
-        content:
-          "❌ Sessão expirada. Use `!fanfic` para começar uma nova história.",
+        content: "❌ Sessão expirada. Use `!fanfic` para começar uma nova história.",
         ephemeral: true,
       });
       return;
@@ -235,22 +239,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       content: `Escolho a opção ${choiceIndex + 1}: ${chosenText}. Continue a história.`,
     });
 
-    await btn.update({
-      content:
-        btn.message.content + `\n\n> ✅ **Você escolheu:** ${chosenText}`,
-      components: [],
-    });
+    const chosenEmbed = EmbedBuilder.from(btn.message.embeds[0]!)
+      .setFooter({ text: `✅ Você escolheu: ${chosenText}` });
 
-    if (btn.channel?.isSendable()) {
-      await btn.channel.sendTyping();
-    }
+    await btn.update({ embeds: [chosenEmbed], components: [] });
+
+    if (btn.channel?.isSendable()) await btn.channel.sendTyping();
 
     try {
       const responseText = await generateStory(session.messages);
       session.messages.push({ role: "assistant", content: responseText });
       const choices = parseChoices(responseText);
       session.choices = choices;
-      await sendStoryChunk(btn, responseText, choices, false);
+      await sendStoryChunk(btn, responseText, choices, false, userId, channelId);
     } catch (err) {
       logger.error({ err }, "Error generating story continuation");
       try {
