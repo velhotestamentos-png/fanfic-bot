@@ -93,7 +93,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const content = message.content.trim();
   const lower = content.toLowerCase();
 
-  if (lower === "!ajuda") {
+  if (lower === "!ajuda game") {
     await message.reply(
       [
         "📖 **Comandos do Bot de Fanfic**",
@@ -104,7 +104,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
         "",
         "`!fanfic save` — Salva a história atual como arquivo `.txt`",
         "`!fanfic reset` — Cancela a história em andamento",
-        "`!ajuda` — Mostra esta mensagem",
+        "`!ajuda game` — Mostra esta mensagem",
         "",
         "**Durante a história:**",
         "• Clique nos botões 1️⃣ 2️⃣ 3️⃣ para escolher o rumo da história",
