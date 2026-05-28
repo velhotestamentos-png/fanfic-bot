@@ -38,7 +38,7 @@ function buildChoiceButtons(
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`choice_${i}`)
-        .setLabel(`${emojis[i]} ${choice.slice(0, 80)}`)
+        .setLabel(`${emojis[i]} ${choice.slice(0, 74)}`)
         .setStyle(ButtonStyle.Primary),
     );
   });
