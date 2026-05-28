@@ -93,6 +93,27 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const content = message.content.trim();
   const lower = content.toLowerCase();
 
+  if (lower === "!ajuda") {
+    await message.reply(
+      [
+        "📖 **Comandos do Bot de Fanfic**",
+        "",
+        "`!fanfic` — Inicia uma nova história de aventura/fantasia",
+        "`!fanfic <tema>` — Inicia uma história com tema personalizado",
+        "  _Ex: `!fanfic escola de magia`, `!fanfic nave espacial`_",
+        "",
+        "`!fanfic save` — Salva a história atual como arquivo `.txt`",
+        "`!fanfic reset` — Cancela a história em andamento",
+        "`!ajuda` — Mostra esta mensagem",
+        "",
+        "**Durante a história:**",
+        "• Clique nos botões 1️⃣ 2️⃣ 3️⃣ para escolher o rumo da história",
+        "• Clique em 🔚 **Encerrar história** para finalizar",
+      ].join("\n"),
+    );
+    return;
+  }
+
   if (!lower.startsWith("!fanfic")) return;
 
   const userId = message.author.id;
