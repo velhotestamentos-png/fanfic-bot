@@ -15,7 +15,7 @@ export async function generateStory(messages: Message[]): Promise<string> {
     body: JSON.stringify({
       model: "openai",
       messages,
-      max_tokens: 600,
+      max_tokens: 300,
       temperature: 0.9,
     }),
   });
@@ -45,7 +45,7 @@ Regras:
 - Escreva em português brasileiro
 - O protagonista é sempre ${character.name}, um(a) ${character.classe} ${character.trait}
 - Use as habilidades e personalidade da classe e traço nas situações da história
-- Cada trecho da história deve ter 3-5 parágrafos envolventes
+- Cada trecho da história deve ter NO MÁXIMO 2 parágrafos curtos e diretos
 - Ao final de CADA resposta, inclua EXATAMENTE 3 opções de escolha numeradas assim:
   [1] (texto curto da opção 1)
   [2] (texto curto da opção 2)
